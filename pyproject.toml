@@ -1,0 +1,11 @@
+[tool.uv.workspace]
+members = [
+    "core",
+    "agent",
+    "api",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["core/tests", "api/tests"]
+python_files = ["test_*.py"]
+addopts = "-p no:cacheprovider -p no:anyio"

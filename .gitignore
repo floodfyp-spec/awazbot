@@ -1,0 +1,36 @@
+# Environment files
+.env
+.env.*
+!.env.example
+!web/.env.local.example
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+build/
+dist/
+
+# Python virtual environment & cache
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Audio data (eval and rendered voice clips)
+eval/data/**/*.wav
+eval/data/**/*.mp3
+eval/data/**/*.ogg
+assets/audio/**/*.wav
+assets/audio/**/*.mp3
+assets/audio/**/*.ogg
+!eval/data/**/.gitkeep
+!assets/audio/**/.gitkeep
+
+# System files
+.DS_Store
+Thumbs.db

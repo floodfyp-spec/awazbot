@@ -1,0 +1,23 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "awaz_agent"
+version = "0.1.0"
+description = "AwazBot KP LiveKit Agents worker"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "awaz_core",
+    "livekit-agents>=1.8.0",
+    "livekit-plugins-silero>=1.8.0",
+    "livekit-plugins-turn-detector>=1.8.0",
+    "livekit-plugins-elevenlabs>=1.8.0",
+    "livekit-plugins-azure>=1.8.0",
+    "livekit-plugins-google>=1.8.0",
+    "livekit-plugins-openai>=1.8.0",
+]
+
+[tool.uv.sources]
+awaz_core = { workspace = true }

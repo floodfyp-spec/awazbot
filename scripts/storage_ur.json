@@ -1,0 +1,15 @@
+{
+  "cookies": [
+    {
+      "name": "awaz_lang",
+      "value": "ur",
+      "domain": "localhost",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    }
+  ],
+  "origins": []
+}

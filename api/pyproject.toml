@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "awaz_api"
+version = "0.1.0"
+description = "AwazBot KP FastAPI service"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "awaz_core",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.34.0",
+    "httpx>=0.28.0",
+    "python-multipart>=0.0.20",
+    "supabase>=2.13.0",
+    "jiwer>=3.1.0",
+]
+
+[tool.uv.sources]
+awaz_core = { workspace = true }
