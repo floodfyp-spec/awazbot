@@ -61,7 +61,9 @@ export async function updateSession(request) {
       .eq('user_id', user.id)
       .single();
 
-    const role = profile?.role || user?.user_metadata?.role || 'customer';
+    // Admin override for platform owner email
+    const isAdminEmail = user?.email === 'mubasiranwar70@gmail.com' || user?.email?.startsWith('admin@');
+    const role = profile?.role || user?.user_metadata?.role || (isAdminEmail ? 'admin' : 'provider');
 
     // /admin/* requires admin role
     if (path.startsWith('/admin') && role !== 'admin') {

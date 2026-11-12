@@ -84,24 +84,30 @@ export default async function ServicesPage({ searchParams }) {
     query = query.contains('areas', [selectedArea]);
   }
 
-  let providers = [];
+  let dbProviders = [];
   try {
     const { data: rawProviders } = await query;
     if (rawProviders && rawProviders.length > 0) {
-      providers = rawProviders;
+      dbProviders = rawProviders.map((p) => ({
+        ...p,
+        name: p.business_name || p.name || 'Local Service Provider',
+        business_name: p.business_name || p.name || 'Local Service Provider',
+      }));
     }
   } catch (err) {
     console.warn('Database query fallback:', err);
   }
 
-  // Fallback to static demo providers if database is empty or not yet seeded
-  if (providers.length === 0) {
-    providers = DEMO_PROVIDERS.filter((p) => {
-      if (selectedTrade && !p.trades.includes(selectedTrade)) return false;
-      if (selectedArea && !p.areas.includes(selectedArea)) return false;
-      return true;
-    });
-  }
+  // Combine real DB approved providers + Demo providers
+  const existingIds = new Set(dbProviders.map((p) => p.id));
+  const filteredDemo = DEMO_PROVIDERS.filter((p) => {
+    if (existingIds.has(p.id)) return false;
+    if (selectedTrade && !p.trades.includes(selectedTrade)) return false;
+    if (selectedArea && !p.areas.includes(selectedArea)) return false;
+    return true;
+  });
+
+  let providers = [...dbProviders, ...filteredDemo];
 
   if (openOnly) {
     providers = providers.filter((p) => checkIsOpen(p.working_hours));
@@ -264,16 +270,26 @@ export default async function ServicesPage({ searchParams }) {
                   )}
                 </CardContent>
 
-                <CardFooter className="flex gap-2 border-t pt-4">
-                  <CallAgentButton
-                    mode="provider"
-                    providerId={provider.id}
-                    label={t.callAgent}
-                    className="flex-1 h-11 text-xs font-semibold"
-                  />
-                  <Link href={`/p/${provider.slug}`} className="flex-1">
-                    <Button variant="outline" className="w-full h-11 text-xs font-medium">
-                      {t.viewProfile}
+                <CardFooter className="flex flex-col gap-2 border-t pt-3">
+                  <div className="grid grid-cols-2 gap-2 w-full">
+                    <CallAgentButton
+                      mode="provider"
+                      providerId={provider.id}
+                      label={lang === 'ur' ? '🎙️ وائس ایجنٹ' : '🎙️ Voice Agent'}
+                      className="w-full h-10 text-xs font-semibold shadow-sm"
+                    />
+                    <Link href={`/chat/${provider.id}`} className="w-full">
+                      <Button
+                        variant="secondary"
+                        className="w-full h-10 text-xs font-semibold gap-1.5 border border-primary/20 bg-primary/10 hover:bg-primary/20 text-primary"
+                      >
+                        {lang === 'ur' ? '💬 چیٹ ایجنٹ' : '💬 Chat Agent'}
+                      </Button>
+                    </Link>
+                  </div>
+                  <Link href={`/p/${provider.slug}`} className="w-full">
+                    <Button variant="ghost" size="sm" className="w-full h-8 text-xs text-muted-foreground hover:text-foreground">
+                      {t.viewProfile} &rarr;
                     </Button>
                   </Link>
                 </CardFooter>

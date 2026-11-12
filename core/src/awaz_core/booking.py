@@ -48,6 +48,8 @@ class BookingDraft(BaseModel):
             missing.append("problem_description")
         if not self.customer_name or len(self.customer_name.strip()) < 2:
             missing.append("customer_name")
+        if not self.customer_phone or len(self.customer_phone.strip()) < 7:
+            missing.append("customer_phone")
         if not self.area or len(self.area.strip()) < 2:
             missing.append("area")
         if not self.preferred_slot or len(self.preferred_slot.strip()) < 3:

@@ -39,8 +39,12 @@ function LoginForm() {
         return;
       }
 
-      toast.success('Signed in successfully!');
-      router.push(nextUrl);
+      const cleanEmail = email.trim().toLowerCase();
+      const isAdmin = cleanEmail === 'mubasiranwar70@gmail.com' || cleanEmail.startsWith('admin@');
+      const targetUrl = searchParams.get('next') || (isAdmin ? '/admin' : '/provider');
+
+      toast.success(isAdmin ? 'Signed in as Admin! Redirecting to Admin Control Center...' : 'Signed in successfully!');
+      router.push(targetUrl);
       router.refresh();
     } catch (err) {
       toast.error('An unexpected error occurred during login.');

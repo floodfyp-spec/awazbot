@@ -43,17 +43,23 @@ export async function generateMetadata({ params }) {
   const supabase = await createClient();
   const { data: provider } = await supabase
     .from('providers')
-    .select('name, trades')
+    .select('business_name, trades')
     .eq('slug', slug)
-    .single();
+    .maybeSingle();
 
   if (!provider) {
-    return { title: 'Provider Not Found — AwazBot KP' };
+    const demo = DEMO_PROVIDERS.find((p) => p.slug === slug);
+    if (!demo) return { title: 'Provider Not Found — AwazBot KP' };
+    return {
+      title: `${demo.name} — AwazBot KP`,
+      description: `Book ${demo.name} for ${demo.trades?.join(', ')} services in Peshawar.`,
+    };
   }
 
+  const name = provider.business_name || 'Local Service Provider';
   return {
-    title: `${provider.name} — AwazBot KP`,
-    description: `Book ${provider.name} for ${provider.trades?.join(', ')} services in Peshawar via voice assistant or WhatsApp.`,
+    title: `${name} — AwazBot KP`,
+    description: `Book ${name} for ${provider.trades?.join(', ')} services in Peshawar via voice assistant or WhatsApp.`,
   };
 }
 
@@ -69,7 +75,7 @@ export default async function ProviderProfilePage({ params }) {
     .select('*')
     .eq('slug', slug)
     .eq('status', 'approved')
-    .single();
+    .maybeSingle();
 
   if (!provider) {
     provider = DEMO_PROVIDERS.find((p) => p.slug === slug) || null;
@@ -78,6 +84,25 @@ export default async function ProviderProfilePage({ params }) {
   if (!provider) {
     notFound();
   }
+
+  const providerName = provider.business_name || provider.name || 'Local Service Provider';
+  let services = provider.services || [];
+  if (services.length === 0 && provider.id) {
+    const { data: dbServices } = await supabase
+      .from('provider_services')
+      .select('name, price_from, price_to')
+      .eq('provider_id', provider.id);
+    if (dbServices && dbServices.length > 0) {
+      services = dbServices.map((s) => ({
+        name: s.name,
+        price_min: s.price_from,
+        price_max: s.price_to,
+        unit: 'job',
+      }));
+    }
+  }
+  provider.services = services;
+  provider.name = providerName;
 
   const isOpen = checkIsOpen(provider.working_hours);
   const waNumber = process.env.NEXT_PUBLIC_WA_PLATFORM_NUMBER || '923000000000';
@@ -122,23 +147,31 @@ export default async function ProviderProfilePage({ params }) {
             </div>
           </div>
 
-          {/* Action CTAs */}
-          <div className="flex flex-col sm:flex-row gap-3 pt-2">
+          {/* Action CTAs: 2-Way AI Booking (Voice & Chat) + WhatsApp */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
             <CallAgentButton
               mode="provider"
               providerId={provider.id}
-              label={t.callAgent}
-              className="h-12 text-base font-semibold shadow-md sm:flex-1"
+              label={lang === 'ur' ? '🎙️ وائس ایجنٹ کو کال کریں' : '🎙️ Call Voice Agent'}
+              className="h-12 text-sm font-semibold shadow-md w-full"
             />
+            <Link href={`/chat/${provider.id}`} className="w-full">
+              <Button
+                variant="secondary"
+                className="w-full h-12 text-sm font-semibold border border-primary/20 bg-primary/10 hover:bg-primary/20 text-primary shadow-sm"
+              >
+                {lang === 'ur' ? '💬 چیٹ ایجنٹ سے بکنگ' : '💬 Book via Chat Agent'}
+              </Button>
+            </Link>
             <a
               href={waUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="sm:flex-1"
+              className="w-full"
             >
               <Button
                 variant="outline"
-                className="w-full h-12 text-base font-semibold border-emerald-600 text-emerald-700 hover:bg-emerald-50 dark:hover:bg-emerald-950/30"
+                className="w-full h-12 text-sm font-semibold border-emerald-600 text-emerald-700 hover:bg-emerald-50 dark:hover:bg-emerald-950/30"
               >
                 {t.messageWhatsApp}
               </Button>

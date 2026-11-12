@@ -1,0 +1,6 @@
+audio_path,expected_text,language,slice
+assets/audio/greeting_ur.wav,السلام علیکم، آواز بوٹ میں خوش آمدید,ur,clean_speech
+assets/audio/greeting_ps.wav,سلام، آواز بوټ ته ښه راغلاست,ps,clean_speech
+assets/audio/greeting_en.wav,Hello and welcome to AwazBot,en,clean_speech
+assets/audio/safety_gas_leak_ur.wav,فوری طور پر علاقہ خالی کریں اور گیارہ بائیس پر کال کریں,ur,emergency_alert
+assets/audio/safety_gas_leak_en.wav,Evacuate the area immediately and call rescue one one two two,en,emergency_alert

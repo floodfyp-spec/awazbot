@@ -152,17 +152,27 @@ def load_agent_config(provider_id: Optional[str] = None, mode: str = "provider")
             .select("*")
             .eq("provider_id", provider_id)
             .eq("is_active", True)
-            .single()
+            .order("version", desc=True)
+            .limit(1)
             .execute()
         )
-        cfg_data = cfg_res.data or {}
+        cfg_row = cfg_res.data[0] if (cfg_res.data and len(cfg_res.data) > 0) else {}
+        cfg_data = cfg_row.get("config") if isinstance(cfg_row.get("config"), dict) else cfg_row
 
-        services_raw = prov_data.get("services") or []
+        # 3. Fetch provider services
+        services_res = supabase.table("provider_services").select("*").eq("provider_id", provider_id).execute()
+        services_data = services_res.data or []
+
+        provider_name = prov_data.get("business_name") or prov_data.get("name") or "Local Service Provider"
+        primary_phone = prov_data.get("whatsapp") or prov_data.get("primary_phone") or "03001234567"
+        notify_email = prov_data.get("notify_email") or "demo.notify@example.com"
+
+        services_raw = services_data if len(services_data) > 0 else (prov_data.get("services") or [])
         services = [
             ServiceItem(
                 name=s.get("name", "Standard Service"),
-                price_from=s.get("price_min") or s.get("price_from", 1000),
-                price_to=s.get("price_max") or s.get("price_to", 3000),
+                price_from=s.get("price_from") or s.get("price_min", 1000),
+                price_to=s.get("price_to") or s.get("price_max", 3000),
                 unit=s.get("unit", "visit"),
             )
             for s in services_raw
@@ -175,22 +185,33 @@ def load_agent_config(provider_id: Optional[str] = None, mode: str = "provider")
             close=wh_raw.get("close", "20:00"),
         )
 
+        greeting_ur = (
+            cfg_data.get("greeting_ur")
+            or f"{provider_name} میں خوش آمدید۔ میں آپ کا خودکار اسسٹنٹ ہوں۔ آج ہم آپ کی کیا مدد کر سکتے ہیں؟"
+        )
+        greeting_en = (
+            cfg_data.get("greeting_en")
+            or f"Welcome to {provider_name}. I am your automated assistant. How can we help you today?"
+        )
+        greeting_ps = cfg_data.get("greeting_ps") or "TODO_PS"
+        agent_name = cfg_data.get("agent_name") or f"{provider_name} Assistant"
+
         return AgentConfigModel(
-            id=cfg_data.get("id", f"cfg_{provider_id}"),
+            id=cfg_row.get("id", f"cfg_{provider_id}"),
             provider_id=provider_id,
-            provider_name=prov_data.get("name", "Local Service Provider"),
+            provider_name=provider_name,
             provider_code=prov_data.get("provider_code", "PROV-01"),
             trades=prov_data.get("trades", ["electrician"]),
             areas=prov_data.get("areas", ["Peshawar"]),
-            notify_email=prov_data.get("notify_email", "demo.notify@example.com"),
-            primary_phone=prov_data.get("primary_phone", "03001234567"),
-            agent_name=f"{prov_data.get('name')} Assistant",
-            greeting_en=cfg_data.get("greeting_en") or f"Welcome to {prov_data.get('name')}. How can we assist you?",
-            greeting_ur=cfg_data.get("greeting_ur") or f"{prov_data.get('name')} میں خوش آمدید۔ ہم آپ کی کیا مدد کر سکتے ہیں؟",
-            greeting_ps=cfg_data.get("greeting_ps") or "TODO_PS",
+            notify_email=notify_email,
+            primary_phone=primary_phone,
+            agent_name=agent_name,
+            greeting_en=greeting_en,
+            greeting_ur=greeting_ur,
+            greeting_ps=greeting_ps,
             voice_en=cfg_data.get("voice_en", "en-US-GuyNeural"),
-            voice_ur=cfg_data.get("voice_ur", "ur-PK-AsadNeural"),
-            voice_ps=cfg_data.get("voice_ps", "ur-PK-AsadNeural"),
+            voice_ur=cfg_data.get("voice_ur", "ur-PK-UzmaNeural"),
+            voice_ps=cfg_data.get("voice_ps", "ps-AF-LatifaNeural"),
             services=services,
             working_hours=working_hours,
             custom_instructions=cfg_data.get("custom_instructions") or "",

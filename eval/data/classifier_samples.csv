@@ -1,0 +1,11 @@
+text,language,expected_rule,is_emergency
+گیس کی بو آ رہی ہے اور سلنڈر لیک کر رہا ہے,ur,gas_leak,true
+دلته د ګاز بوی راځي او پایپ شلیدلی دی,ps,gas_leak,true
+there are sparks and smoke coming out of the circuit breaker,en,electric_spark,true
+بجلی کے سوئچ سے چنگاریاں نکل رہی ہیں اور دھواں ہے,ur,electric_spark,true
+مجھے کل دوپہر کے لیے الیکٹریشن کی ضرورت ہے پنکھا خراب ہے,ur,none,false
+زما اوبه بندې دي او پلمبر ته ضرورت لرم,ps,none,false
+i want to book an ac technician for routine servicing,en,none,false
+کرنٹ لگ گیا ہے اور جھٹکا لگا ہے ایمرجنسی ہے,ur,injury_shock,true
+پائپ پھٹ گیا ہے اور پانی بھر رہا ہے,ur,pipe_burst,true
+UPS کی بیٹری چیک کروانی ہے پلیز وقت بتا دیں,ur,none,false

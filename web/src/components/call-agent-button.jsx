@@ -43,8 +43,9 @@ export function CallAgentButton({
         sessionStorage.setItem(`call_${data.roomName}`, JSON.stringify(data));
       }
 
-      toast.success('Call room created! Connecting...');
-      router.push(`/call/${data.roomName}`);
+      toast.success(`Connected to ${data.provider?.name || 'AwazBot Receptionist'}!`);
+      const targetQuery = providerId ? `?provider=${encodeURIComponent(providerId)}` : '';
+      router.push(`/call/${data.roomName}${targetQuery}`);
     } catch (err) {
       console.error('Call initialization error:', err);
       toast.error('Network error connecting to voice server.');

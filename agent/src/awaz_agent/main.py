@@ -1,9 +1,10 @@
 """AwazBot KP LiveKit Agent Worker.
 
 Listens for dispatch requests under agent_name="awazbot",
-initializes STT/LLM/TTS pipelines, mounts the ProviderAgent,
-greets callers immediately, records conversation turns,
-and publishes real-time booking state back into the WebRTC room.
+initializes STT/LLM/TTS pipelines, mounts DirectoryAgent or ProviderAgent,
+greets callers immediately, runs pre-LLM safety guard interceptors,
+handles agent-to-agent session handoffs in the same room,
+and publishes real-time booking and safety events back into the WebRTC room.
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ from livekit.agents import (
 )
 from livekit.rtc import DataPacket
 
+from awaz_agent.directory_agent import DirectoryAgent
 from awaz_agent.pipeline_factory import (
     create_llm,
     create_stt,
@@ -35,8 +37,18 @@ from awaz_agent.pipeline_factory import (
     create_vad,
 )
 from awaz_agent.provider_agent import ProviderAgent
-from awaz_core.config import KHAN_ELECTRIC_CONFIG, load_provider_config
-from awaz_core.tools_db import finalize_call_record, log_call_turn
+from awaz_core.config import (
+    AgentConfigModel,
+    KHAN_ELECTRIC_CONFIG,
+    load_provider_config,
+)
+from awaz_core.notify_email import send_emergency_email
+from awaz_core.safety import check_safety
+from awaz_core.tools_db import (
+    finalize_call_record,
+    log_call_turn,
+    record_safety_event,
+)
 
 load_dotenv()
 
@@ -76,6 +88,7 @@ async def entrypoint(ctx: JobContext) -> None:
     start_time = time.time()
     turn_counter = [0]
     transcript_accumulator: list[str] = []
+    current_lang = [lang]
 
     logger.info(
         "Job config: mode=%s, provider_id=%s, call_id=%s, lang=%s",
@@ -85,7 +98,7 @@ async def entrypoint(ctx: JobContext) -> None:
         lang,
     )
 
-    # 3. Load provider configuration
+    # 3. Load provider configuration if in provider mode
     provider_config = None
     if provider_id:
         try:
@@ -93,27 +106,18 @@ async def entrypoint(ctx: JobContext) -> None:
         except Exception as e:
             logger.warning("Could not load provider %s from DB (%s), falling back to Khan Electric", provider_id, e)
 
-    if not provider_config:
+    if not provider_config and mode == "provider":
         provider_config = KHAN_ELECTRIC_CONFIG
         logger.info("Using default provider config: %s", provider_config.provider_name)
 
     # 4. Initialize pipeline components
     stt = create_stt(lang=lang)
     llm = create_llm()
-    tts = create_tts(
-        lang=lang,
-        voice=provider_config.voice_ur if lang == "ur" else provider_config.voice_ps,
+    tts_voice = (
+        provider_config.voice_ur if provider_config and lang == "ur" else "ur-PK-UzmaNeural"
     )
+    tts = create_tts(lang=lang, voice=tts_voice)
     vad = create_vad()
-
-    # 5. Build agent and session
-    agent = ProviderAgent(
-        provider_config=provider_config,
-        call_id=call_id,
-        room=ctx.room,
-        lang=lang,
-        customer_phone=customer_phone,
-    )
 
     session = AgentSession(
         stt=stt,
@@ -123,6 +127,41 @@ async def entrypoint(ctx: JobContext) -> None:
         min_endpointing_delay=0.6,
         max_endpointing_delay=3.0,
     )
+
+    # Reference holding the currently active agent (ProviderAgent or DirectoryAgent)
+    active_agent: list[Any] = []
+
+    # Directory -> Provider Agent Handoff Callback
+    def on_directory_handoff(new_config: AgentConfigModel) -> None:
+        logger.info("Executing Agent Handoff: Directory -> %s", new_config.provider_name)
+        new_provider_agent = ProviderAgent(
+            provider_config=new_config,
+            call_id=call_id,
+            room=ctx.room,
+            lang=current_lang[0],
+            customer_phone=customer_phone,
+        )
+        active_agent[0] = new_provider_agent
+        if hasattr(session, "update_agent"):
+            session.update_agent(new_provider_agent)
+
+    # 5. Build agent based on mode
+    if mode == "directory":
+        agent = DirectoryAgent(
+            call_id=call_id,
+            room=ctx.room,
+            lang=lang,
+            on_handoff=on_directory_handoff,
+        )
+    else:
+        agent = ProviderAgent(
+            provider_config=provider_config or KHAN_ELECTRIC_CONFIG,
+            call_id=call_id,
+            room=ctx.room,
+            lang=lang,
+            customer_phone=customer_phone,
+        )
+    active_agent.append(agent)
 
     # 6. Wire real-time events for call monitoring & transcripts
     @session.on("agent_state_changed")
@@ -139,7 +178,6 @@ async def entrypoint(ctx: JobContext) -> None:
     def on_conversation_item_added(ev: ConversationItemAddedEvent) -> None:
         item = ev.item
         role = getattr(item, "role", "unknown")
-        # Format text from ChatContent or string
         content = getattr(item, "content", "")
         if isinstance(content, list):
             text = " ".join(str(part) for part in content)
@@ -159,7 +197,7 @@ async def entrypoint(ctx: JobContext) -> None:
             turn_index=turn_counter[0],
             speaker=speaker,
             text=text,
-            lang=agent.lang,
+            lang=active_agent[0].lang,
         )
 
         # Broadcast transcript line to client UI
@@ -174,38 +212,135 @@ async def entrypoint(ctx: JobContext) -> None:
                 ctx.room.local_participant.publish_data(t_payload, topic="awaz.transcript")
             )
 
-    # 7. Listen for simulated text turns over WebRTC data channel (awaz.user_turn)
+    # 7. Core user text handler: Pre-LLM Safety Guard + Language Detection + LLM Dispatch
+    async def process_user_turn(user_text: str) -> None:
+        if not user_text:
+            return
+
+        logger.info("Processing user turn: '%s' (current_lang=%s)", user_text, current_lang[0])
+
+        # Step 1: Pre-LLM Safety Guard Check (§5.4)
+        safety_res = check_safety(user_text, lang=current_lang[0])
+        if safety_res.matched:
+            logger.warning(
+                "🚨 CRITICAL SAFETY HAZARD DETECTED: %s ('%s')",
+                safety_res.rule_code,
+                safety_res.matched_text,
+            )
+            # Interrupt ongoing TTS audio immediately
+            try:
+                session.interrupt()
+            except Exception:
+                pass
+
+            # Publish emergency data packet on 'awaz.events'
+            if ctx.room.local_participant:
+                event_data = json.dumps({
+                    "type": "emergency_alert",
+                    "emergency": True,
+                    "rule": safety_res.rule_code,
+                    "message": safety_res.get_message(current_lang[0]),
+                    "matched_text": safety_res.matched_text,
+                }).encode("utf-8")
+                await ctx.room.local_participant.publish_data(
+                    event_data,
+                    topic="awaz.events",
+                    reliable=True,
+                )
+
+            # Record event in safety_events DB table
+            record_safety_event(
+                call_id=call_id,
+                rule_code=safety_res.rule_code or "emergency_hazard",
+                matched_text=safety_res.matched_text or user_text,
+            )
+
+            # Dispatch emergency notification email to provider/admin
+            target_prov = (
+                provider_config.model_dump()
+                if provider_config
+                else {"id": provider_id, "business_name": "Peshawar Service Provider"}
+            )
+            send_emergency_email(
+                call={
+                    "id": call_id,
+                    "customer_phone": customer_phone,
+                    "matched_text": safety_res.matched_text,
+                },
+                provider=target_prov,
+                rule=safety_res.rule_code or "Hazard",
+            )
+
+            # Speak pre-rendered/fallback safety instructions
+            safety_speech = safety_res.get_message(current_lang[0])
+            await session.say(safety_speech)
+
+            # Mark draft urgency as EMERGENCY so booking prioritizes immediate response
+            if hasattr(active_agent[0], "draft") and active_agent[0].draft:
+                active_agent[0].draft.urgency = "EMERGENCY"
+                active_agent[0].draft.problem_description = (
+                    f"[EMERGENCY: {safety_res.rule_code}] {user_text}"
+                )
+            return
+
+        # Step 2: Language Switching Detection (§5.6)
+        if any(c in user_text for c in "ښۍړڼېږ") or "پښتو" in user_text:
+            if current_lang[0] != "ps":
+                logger.info("Language switch: Pashto detected")
+                current_lang[0] = "ps"
+                active_agent[0].lang = "ps"
+        elif any(w in user_text.lower() for w in ["hello", "need", "english", "service"]):
+            if current_lang[0] != "en":
+                logger.info("Language switch: English detected")
+                current_lang[0] = "en"
+                active_agent[0].lang = "en"
+
+        # Step 3: Pass safe transcript to active LLM Agent
+        await session.generate_reply(user_input=user_text)
+
+    # 8. Listen for simulated text turns over WebRTC data channel (awaz.user_turn)
     @ctx.room.on("data_received")
     def on_data_received(dp: DataPacket) -> None:
         if dp.topic == "awaz.user_turn":
             try:
                 user_text = dp.data.decode("utf-8").strip()
-                logger.info("Received typed user turn: '%s'", user_text)
                 if user_text:
-                    asyncio.create_task(session.generate_reply(user_input=user_text))
+                    asyncio.create_task(process_user_turn(user_text))
             except Exception as ex:
                 logger.error("Failed to process user_turn data packet: %s", ex)
 
-    # 8. Start the agent session with the room
-    session.start(agent=agent, room=ctx.room)
+    # 9. Start the agent session with the room
+    logger.info("Starting AgentSession with room: %s", ctx.room.name)
+    await session.start(agent=agent, room=ctx.room)
+    logger.info("AgentSession started successfully!")
 
-    # 9. Greet caller immediately upon joining room
-    greeting = (
-        provider_config.greeting_ur
-        if lang == "ur"
-        else (provider_config.greeting_ps or "Salam! Kha charay!")
-    )
+    # 10. Greet caller immediately upon joining room
+    if mode == "directory":
+        greeting = (
+            "السلام علیکم! آواز بوٹ کے پی میں خوش آمدید۔ پښتو که اردو؟ آپ کو پشاور کے کس علاقے میں الیکٹریشن، سولر یا پلمبر کی ضرورت ہے؟"
+            if lang == "ur"
+            else "سلام علیکم! آواز بوټ کې ښه راغلاست. پښتو که اردو؟ تاسو پېښور کې کوم خدمت ته اړتیا لرئ؟"
+        )
+    else:
+        greeting = (
+            provider_config.greeting_ur
+            if provider_config and lang == "ur"
+            else (provider_config.greeting_ps or "Salam! Kha charay!")
+        )
+
     logger.info("Delivering initial greeting: %s", greeting)
     try:
         await session.say(greeting)
     except Exception as e:
         logger.warning("Error during initial greeting: %s", e)
 
-    # 10. Register shutdown callback to finalize DB call record
-    def on_shutdown() -> None:
+    # 11. Register shutdown callback to finalize DB call record
+    async def on_shutdown(*args: Any, **kwargs: Any) -> None:
         duration = int(time.time() - start_time)
         full_transcript = "\n".join(transcript_accumulator)
-        booking_id = agent.draft.category_id or None
+        booking_id = None
+        if hasattr(active_agent[0], "draft") and active_agent[0].draft:
+            booking_id = active_agent[0].draft.category_id or None
         logger.info("Finalizing call record %s (duration: %ds)", call_id, duration)
         finalize_call_record(
             call_id=call_id,
@@ -219,5 +354,4 @@ async def entrypoint(ctx: JobContext) -> None:
 
 
 if __name__ == "__main__":
-    # Run agent worker with explicit agent_name="awazbot"
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, agent_name="awazbot"))

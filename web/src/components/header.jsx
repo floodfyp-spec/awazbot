@@ -25,9 +25,13 @@ export function Header({ currentLang = 'en' }) {
           const { data: profile } = await supabase
             .from('profiles')
             .select('role, full_name')
-            .eq('id', user.id)
+            .eq('user_id', user.id)
             .single();
-          setRole(profile?.role || user.user_metadata?.role || 'provider');
+          const determinedRole =
+            profile?.role ||
+            user.user_metadata?.role ||
+            (user.email === 'mubasiranwar70@gmail.com' ? 'admin' : 'provider');
+          setRole(determinedRole);
         } else {
           setRole(null);
         }
@@ -47,9 +51,13 @@ export function Header({ currentLang = 'en' }) {
         const { data: profile } = await supabase
           .from('profiles')
           .select('role')
-          .eq('id', currentUser.id)
+          .eq('user_id', currentUser.id)
           .single();
-        setRole(profile?.role || currentUser.user_metadata?.role || 'provider');
+        const determinedRole =
+          profile?.role ||
+          currentUser.user_metadata?.role ||
+          (currentUser.email === 'mubasiranwar70@gmail.com' ? 'admin' : 'provider');
+        setRole(determinedRole);
       } else {
         setRole(null);
       }
@@ -76,6 +84,11 @@ export function Header({ currentLang = 'en' }) {
     router.refresh();
   };
 
+  const isAdmin =
+    role === 'admin' ||
+    user?.email === 'mubasiranwar70@gmail.com' ||
+    user?.email?.startsWith('admin@');
+
   return (
     <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="container mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6">
@@ -96,6 +109,13 @@ export function Header({ currentLang = 'en' }) {
 
         {/* Navigation & Controls */}
         <div className="flex items-center gap-2 sm:gap-3">
+          {/* Services Link */}
+          <Link href="/services">
+            <Button variant="ghost" size="sm" className="h-10 px-3 text-sm font-medium">
+              {isUrdu ? 'سروسز' : 'Services'}
+            </Button>
+          </Link>
+
           {/* Language Toggle */}
           <Button
             variant="outline"
@@ -118,10 +138,15 @@ export function Header({ currentLang = 'en' }) {
                 </Button>
               </Link>
 
-              {role === 'admin' && (
+              {isAdmin && (
                 <Link href="/admin">
-                  <Button variant="secondary" size="sm" className="h-10 px-3 text-sm font-medium">
-                    {isUrdu ? 'ایڈمن' : 'Admin'}
+                  <Button
+                    variant="default"
+                    size="sm"
+                    className="h-10 px-3 text-sm font-semibold bg-red-600 hover:bg-red-700 text-white shadow-sm flex items-center gap-1.5"
+                  >
+                    <span>⚙️</span>
+                    <span>{isUrdu ? 'ایڈمن کنٹرول' : 'Admin Portal'}</span>
                   </Button>
                 </Link>
               )}

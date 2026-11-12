@@ -29,6 +29,10 @@ def _get_supabase_admin():
         return None
 
 
+# Public alias for runtime modules
+get_supabase_client = _get_supabase_admin
+
+
 def check_availability(
     provider_config: Any = None,
     urgency: str = "same_day",
@@ -236,3 +240,38 @@ def search_providers(
 def describe_provider(provider_id: str) -> str:
     """Returns a short spoken summary of the provider."""
     return "Khan Electric is a premier electrical and solar contractor serving Hayatabad and Peshawar with verified master technicians."
+
+
+def record_safety_event(
+    call_id: str,
+    rule_code: str,
+    matched_text: str,
+    actions: Optional[list[str]] = None,
+) -> Optional[str]:
+    """Records emergency hazard event into public.safety_events and marks call outcome=emergency."""
+    client = _get_supabase_admin()
+    if not client:
+        return None
+
+    try:
+        # 1. Insert into safety_events table
+        res = client.table("safety_events").insert({
+            "call_id": call_id,
+            "rule_code": rule_code,
+            "matched_text": matched_text,
+            "actions": actions or ["audio_warning", "data_packet", "emergency_email"],
+        }).execute()
+
+        # 2. Update calls outcome to 'emergency'
+        try:
+            client.table("calls").update({
+                "outcome": "emergency",
+            }).eq("id", call_id).execute()
+        except Exception as update_err:
+            logger.debug("Could not update call outcome: %s", update_err)
+
+        if res and res.data:
+            return res.data[0].get("id")
+    except Exception as e:
+        logger.warning("Could not record safety_events row: %s", e)
+    return None
