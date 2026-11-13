@@ -99,6 +99,11 @@ function CallInterface({ roomId, lang, callData, providerParam }) {
   const [duration, setDuration] = useState(0);
   const [transcript, setTranscript] = useState([]);
   const [interimUserText, setInterimUserText] = useState('');
+  const [hasStarted, setHasStarted] = useState(false);
+  const [micAllowed, setMicAllowed] = useState(false);
+  const [liveVolume, setLiveVolume] = useState(0);
+  const [speechLang, setSpeechLang] = useState('ur-PK');
+  const [isRecordingWhisper, setIsRecordingWhisper] = useState(false);
   const [bookingDraft, setBookingDraft] = useState({
     customer_name: null,
     customer_phone: null,
@@ -118,6 +123,9 @@ function CallInterface({ roomId, lang, callData, providerParam }) {
   const recognitionRef = useRef(null);
   const isSpeakingRef = useRef(false);
   const currentAudioRef = useRef(null);
+  const mediaStreamRef = useRef(null);
+  const audioContextRef = useRef(null);
+  const mediaRecorderRef = useRef(null);
 
   // Stop any active audio immediately (Instant Barge-in / Interrupt)
   const stopSpeaking = useCallback(() => {
@@ -168,7 +176,7 @@ function CallInterface({ roomId, lang, callData, providerParam }) {
           isSpeakingRef.current = false;
           setAgentState('listening');
           URL.revokeObjectURL(audioUrl);
-          if (!isMuted && recognitionRef.current) {
+          if (!isMuted && recognitionRef.current && hasStarted) {
             try { recognitionRef.current.start(); } catch (e) {}
           }
         };
@@ -177,7 +185,7 @@ function CallInterface({ roomId, lang, callData, providerParam }) {
           isSpeakingRef.current = false;
           setAgentState('listening');
           URL.revokeObjectURL(audioUrl);
-          if (!isMuted && recognitionRef.current) {
+          if (!isMuted && recognitionRef.current && hasStarted) {
             try { recognitionRef.current.start(); } catch (e) {}
           }
         };
@@ -191,6 +199,9 @@ function CallInterface({ roomId, lang, callData, providerParam }) {
           console.warn('Audio playback note (requires user gesture):', playErr.message);
           isSpeakingRef.current = false;
           setAgentState('listening');
+          if (!isMuted && recognitionRef.current && hasStarted) {
+            try { recognitionRef.current.start(); } catch (e) {}
+          }
         }
         return;
       }
@@ -214,7 +225,7 @@ function CallInterface({ roomId, lang, callData, providerParam }) {
       utterance.onend = () => {
         isSpeakingRef.current = false;
         setAgentState('listening');
-        if (!isMuted && recognitionRef.current) {
+        if (!isMuted && recognitionRef.current && hasStarted) {
           try { recognitionRef.current.start(); } catch (e) {}
         }
       };
@@ -222,7 +233,7 @@ function CallInterface({ roomId, lang, callData, providerParam }) {
       utterance.onerror = () => {
         isSpeakingRef.current = false;
         setAgentState('listening');
-        if (!isMuted && recognitionRef.current) {
+        if (!isMuted && recognitionRef.current && hasStarted) {
           try { recognitionRef.current.start(); } catch (e) {}
         }
       };
@@ -233,7 +244,7 @@ function CallInterface({ roomId, lang, callData, providerParam }) {
       isSpeakingRef.current = false;
       setAgentState('listening');
     }
-  }, [isMuted, stopSpeaking, targetProvider]);
+  }, [isMuted, stopSpeaking, targetProvider, hasStarted]);
 
   // Scroll transcript to bottom on new items
   useEffect(() => {
@@ -256,115 +267,6 @@ function CallInterface({ roomId, lang, callData, providerParam }) {
     const m = Math.floor(secs / 60).toString().padStart(2, '0');
     const s = (secs % 60).toString().padStart(2, '0');
     return `${m}:${s}`;
-  };
-
-  // Immediate Greeting tailored to this specific provider's configured greeting
-  useEffect(() => {
-    if (connectionState === ConnectionState.Connected && !hasGreetedRef.current) {
-      hasGreetedRef.current = true;
-      const initialGreeting = customGreeting;
-
-      const timer = setTimeout(() => {
-        setTranscript((prev) => {
-          if (prev.length === 0) {
-            return [
-              {
-                speaker: 'agent',
-                text: initialGreeting,
-                time: new Date().toLocaleTimeString(),
-              },
-            ];
-          }
-          return prev;
-        });
-        speakAudio(initialGreeting);
-      }, 700);
-
-      return () => clearTimeout(timer);
-    }
-  }, [connectionState, speakAudio, customGreeting]);
-
-  // Listen to LiveKit data packets
-  useEffect(() => {
-    if (!room) return;
-
-    const handleDataReceived = (payload, participant, kind, topic) => {
-      try {
-        const text = new TextDecoder().decode(payload);
-        const data = JSON.parse(text);
-
-        if (topic === 'awaz.booking') {
-          if (data.type === 'draft_update') {
-            setBookingDraft((prev) => ({
-              ...prev,
-              ...(data.draft || {}),
-            }));
-          } else if (data.type === 'booking_confirmed') {
-            setConfirmedBookingId(data.booking_id);
-            if (data.draft) {
-              setBookingDraft(data.draft);
-            }
-            toast.success(`Booking confirmed! ID: ${data.booking_id}`);
-          }
-        } else if (topic === 'awaz.agent_state') {
-          if (data.state) {
-            setAgentState(data.state);
-          }
-        } else if (topic === 'awaz.transcript') {
-          setTranscript((prev) => [
-            ...prev,
-            { speaker: data.speaker, text: data.text, time: new Date().toLocaleTimeString() },
-          ]);
-        } else if (topic === 'awaz.events') {
-          if (data.emergency) {
-            setEmergencyAlert(data);
-            setAgentState('speaking');
-            toast.error(`EMERGENCY: ${data.rule || 'Hazard detected'}!`);
-          }
-        } else if (topic === 'awaz.handoff') {
-          setConnectedProvider({
-            id: data.provider_id,
-            name: data.provider_name,
-            code: data.provider_code,
-          });
-          toast.success(`Connected to ${data.provider_name}!`);
-        }
-      } catch (err) {
-        console.error('Error decoding room data packet:', err);
-      }
-    };
-
-    room.on(RoomEvent.DataReceived, handleDataReceived);
-    return () => {
-      room.off(RoomEvent.DataReceived, handleDataReceived);
-    };
-  }, [room]);
-
-  // Toggle Microphone
-  const toggleMic = async () => {
-    try {
-      const nextMuted = !isMuted;
-      setIsMuted(nextMuted);
-
-      if (room?.localParticipant) {
-        await room.localParticipant.setMicrophoneEnabled(!nextMuted);
-      }
-
-      if (nextMuted) {
-        if (recognitionRef.current) {
-          try { recognitionRef.current.stop(); } catch (e) {}
-        }
-        toast.info('Microphone muted');
-      } else {
-        if (recognitionRef.current && !isSpeakingRef.current) {
-          try { recognitionRef.current.start(); } catch (e) {}
-        }
-        setAgentState('listening');
-        toast.info('Microphone unmuted (Listening...)');
-      }
-    } catch (err) {
-      toast.error('Could not toggle microphone: ' + err.message);
-    }
   };
 
   // Ultra-Fast Conversational Turn Processor
@@ -462,9 +364,9 @@ function CallInterface({ roomId, lang, callData, providerParam }) {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                  customer_name: update.customer_name || bookingDraft.customer_name || 'فہم انور',
+                  customer_name: update.customer_name || bookingDraft.customer_name || 'Valued Customer',
                   customer_phone: update.customer_phone || bookingDraft.customer_phone || '03001234567',
-                  area: update.area || bookingDraft.area || 'حیات آباد فیز 4، پشاور',
+                  area: update.area || bookingDraft.area || 'حیات آباد، پشاور',
                   problem_description: update.problem_description || bookingDraft.problem_description || tradeInfo.defaultProblem,
                   preferred_slot: update.preferred_slot || bookingDraft.preferred_slot || 'کل صبح 11:00 بجے',
                   provider_id: targetProvider.id,
@@ -508,68 +410,294 @@ function CallInterface({ roomId, lang, callData, providerParam }) {
     [devInput, room, speakAudio, bookingDraft, callData, roomId, providerName, providerEmail, targetProvider, tradeInfo, transcript, confirmedBookingId]
   );
 
-  // Setup Continuous Browser Speech Recognition for Zero-Latency Voice Mic
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
+  // Initialize Microphone Permission, Live VAD Visualizer & Audio Engine
+  const startCallSession = async () => {
+    try {
+      // 1. Explicitly prompt and acquire real microphone access
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+      mediaStreamRef.current = stream;
+      setMicAllowed(true);
+      setHasStarted(true);
+      toast.success('Microphone connected! Speak freely.');
 
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) return;
+      // 2. Real-Time VAD (Voice Activity Detection) & Volume Analyser
+      try {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (AudioCtx) {
+          const audioCtx = new AudioCtx();
+          audioContextRef.current = audioCtx;
+          const source = audioCtx.createMediaStreamSource(stream);
+          const analyser = audioCtx.createAnalyser();
+          analyser.fftSize = 64;
+          source.connect(analyser);
 
-    const recognition = new SpeechRecognition();
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = 'ur-PK';
+          const dataArray = new Uint8Array(analyser.frequencyBinCount);
+          const updateVolume = () => {
+            if (!analyser || isMuted) {
+              setLiveVolume(0);
+              requestAnimationFrame(updateVolume);
+              return;
+            }
+            analyser.getByteFrequencyData(dataArray);
+            let sum = 0;
+            for (let i = 0; i < dataArray.length; i++) {
+              sum += dataArray[i];
+            }
+            const avg = sum / dataArray.length;
+            setLiveVolume(avg);
 
-    recognition.onresult = (event) => {
-      let interim = '';
-      let final = '';
+            // True ChatGPT Instant Barge-In: if user speaks loudly while agent is speaking, stop immediately!
+            if (avg > 24 && isSpeakingRef.current) {
+              stopSpeaking();
+            }
 
-      for (let i = event.resultIndex; i < event.results.length; ++i) {
-        if (event.results[i].isFinal) {
-          final += event.results[i][0].transcript;
-        } else {
-          interim += event.results[i][0].transcript;
+            requestAnimationFrame(updateVolume);
+          };
+          requestAnimationFrame(updateVolume);
         }
+      } catch (audioErr) {
+        console.warn('Audio analyser setup note:', audioErr);
       }
 
-      if (interim) {
-        // Instant Barge-In: interrupt agent speech immediately when user begins talking
-        if (isSpeakingRef.current) {
-          stopSpeaking();
+      // 3. Start Browser Speech Recognition
+      startContinuousSTT(speechLang);
+
+      // 4. Speak initial custom greeting
+      if (!hasGreetedRef.current) {
+        hasGreetedRef.current = true;
+        setTranscript((prev) => {
+          if (prev.length === 0) {
+            return [
+              {
+                speaker: 'agent',
+                text: customGreeting,
+                time: new Date().toLocaleTimeString(),
+              },
+            ];
+          }
+          return prev;
+        });
+        await speakAudio(customGreeting);
+      }
+    } catch (err) {
+      console.warn('Microphone permission error:', err);
+      toast.error('Microphone blocked: Please allow microphone permission in your browser URL bar.');
+    }
+  };
+
+  // Continuous Browser Speech Recognition Engine
+  const startContinuousSTT = useCallback(
+    (langCode) => {
+      if (typeof window === 'undefined') return;
+
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SpeechRecognition) return;
+
+      if (recognitionRef.current) {
+        try { recognitionRef.current.abort(); } catch (e) {}
+      }
+
+      const recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = langCode || speechLang || 'ur-PK';
+
+      recognition.onresult = (event) => {
+        let interim = '';
+        let final = '';
+
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          if (event.results[i].isFinal) {
+            final += event.results[i][0].transcript;
+          } else {
+            interim += event.results[i][0].transcript;
+          }
         }
-        setInterimUserText(interim);
+
+        if (interim) {
+          if (isSpeakingRef.current) {
+            stopSpeaking();
+          }
+          setInterimUserText(interim);
+        }
+
+        if (final.trim()) {
+          setInterimUserText('');
+          sendUserTurn(final.trim());
+        }
+      };
+
+      recognition.onerror = (e) => {
+        if (e.error === 'not-allowed') {
+          toast.error('Microphone access blocked. Click the microphone icon to grant permission.');
+        } else if (e.error !== 'no-speech' && e.error !== 'aborted') {
+          console.warn('SpeechRecognition error:', e.error);
+        }
+      };
+
+      recognition.onend = () => {
+        if (!isMuted && !isSpeakingRef.current && hasStarted) {
+          try { recognition.start(); } catch (e) {}
+        }
+      };
+
+      recognitionRef.current = recognition;
+      try {
+        recognition.start();
+        setAgentState('listening');
+      } catch (err) {
+        console.warn('Recognition start note:', err.message);
       }
+    },
+    [isMuted, stopSpeaking, sendUserTurn, speechLang, hasStarted]
+  );
 
-      if (final.trim()) {
-        setInterimUserText('');
-        sendUserTurn(final.trim());
-      }
-    };
-
-    recognition.onerror = (e) => {
-      if (e.error !== 'no-speech') {
-        console.warn('SpeechRecognition error:', e.error);
-      }
-    };
-
-    recognition.onend = () => {
-      if (!isMuted && !isSpeakingRef.current) {
-        try { recognition.start(); } catch (e) {}
-      }
-    };
-
-    recognitionRef.current = recognition;
-
-    if (connectionState === ConnectionState.Connected && !isMuted) {
-      try { recognition.start(); } catch (e) {}
+  // Toggle Microphone
+  const toggleMic = async () => {
+    if (!hasStarted) {
+      await startCallSession();
+      return;
     }
 
-    return () => {
-      try { recognition.abort(); } catch (e) {}
-    };
-  }, [connectionState, isMuted, sendUserTurn]);
+    try {
+      const nextMuted = !isMuted;
+      setIsMuted(nextMuted);
 
-  // ChatGPT Voice Orb Visual State
+      if (room?.localParticipant) {
+        await room.localParticipant.setMicrophoneEnabled(!nextMuted);
+      }
+
+      if (nextMuted) {
+        if (recognitionRef.current) {
+          try { recognitionRef.current.stop(); } catch (e) {}
+        }
+        toast.info('Microphone muted');
+      } else {
+        if (recognitionRef.current && !isSpeakingRef.current) {
+          try { recognitionRef.current.start(); } catch (e) {}
+        }
+        setAgentState('listening');
+        toast.info('Microphone unmuted (Listening...)');
+      }
+    } catch (err) {
+      toast.error('Could not toggle microphone: ' + err.message);
+    }
+  };
+
+  // Push-to-Talk / Whisper Voice Backup (For Firefox or Mobile Browsers)
+  const startWhisperRecording = async () => {
+    try {
+      stopSpeaking();
+      if (!mediaStreamRef.current) {
+        mediaStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
+        setMicAllowed(true);
+        setHasStarted(true);
+      }
+      const recorder = new MediaRecorder(mediaStreamRef.current, { mimeType: 'audio/webm' });
+      const chunks = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunks.push(e.data);
+      };
+      recorder.onstop = async () => {
+        const audioBlob = new Blob(chunks, { type: 'audio/webm' });
+        const formData = new FormData();
+        formData.append('file', audioBlob, 'audio.webm');
+        setAgentState('thinking');
+        try {
+          const res = await fetch('/api/calls/transcribe', {
+            method: 'POST',
+            body: formData,
+          });
+          const data = await res.json();
+          if (data.text && data.text.trim()) {
+            sendUserTurn(data.text.trim());
+          } else {
+            setAgentState('listening');
+          }
+        } catch (whisperErr) {
+          console.warn('Whisper fallback error:', whisperErr);
+          setAgentState('listening');
+        }
+      };
+      mediaRecorderRef.current = recorder;
+      recorder.start();
+      setIsRecordingWhisper(true);
+      setAgentState('listening');
+    } catch (err) {
+      toast.error('Could not start voice recording: ' + err.message);
+    }
+  };
+
+  const stopWhisperRecording = () => {
+    if (mediaRecorderRef.current && isRecordingWhisper) {
+      mediaRecorderRef.current.stop();
+      setIsRecordingWhisper(false);
+    }
+  };
+
+  // Listen to LiveKit data packets
+  useEffect(() => {
+    if (!room) return;
+
+    const handleDataReceived = (payload, participant, kind, topic) => {
+      try {
+        const text = new TextDecoder().decode(payload);
+        const data = JSON.parse(text);
+
+        if (topic === 'awaz.booking') {
+          if (data.type === 'draft_update') {
+            setBookingDraft((prev) => ({
+              ...prev,
+              ...(data.draft || {}),
+            }));
+          } else if (data.type === 'booking_confirmed') {
+            setConfirmedBookingId(data.booking_id);
+            if (data.draft) {
+              setBookingDraft(data.draft);
+            }
+            toast.success(`Booking confirmed! ID: ${data.booking_id}`);
+          }
+        } else if (topic === 'awaz.agent_state') {
+          if (data.state) {
+            setAgentState(data.state);
+          }
+        } else if (topic === 'awaz.transcript') {
+          setTranscript((prev) => [
+            ...prev,
+            { speaker: data.speaker, text: data.text, time: new Date().toLocaleTimeString() },
+          ]);
+        } else if (topic === 'awaz.events') {
+          if (data.emergency) {
+            setEmergencyAlert(data);
+            setAgentState('speaking');
+            toast.error(`EMERGENCY: ${data.rule || 'Hazard detected'}!`);
+          }
+        } else if (topic === 'awaz.handoff') {
+          setConnectedProvider({
+            id: data.provider_id,
+            name: data.provider_name,
+            code: data.provider_code,
+          });
+          toast.success(`Connected to ${data.provider_name}!`);
+        }
+      } catch (err) {
+        console.error('Error decoding room data packet:', err);
+      }
+    };
+
+    room.on(RoomEvent.DataReceived, handleDataReceived);
+    return () => {
+      room.off(RoomEvent.DataReceived, handleDataReceived);
+    };
+  }, [room]);
+
+  // Dynamic Visual State for ChatGPT Orb
   const getOrbVisuals = () => {
     switch (agentState) {
       case 'speaking':
@@ -711,46 +839,76 @@ function CallInterface({ roomId, lang, callData, providerParam }) {
             <div
               className={`h-36 w-36 sm:h-44 sm:w-44 rounded-full bg-gradient-to-tr ${orb.glow} ${orb.pulseScale} transition-all duration-700 flex items-center justify-center cursor-pointer select-none`}
               onClick={toggleMic}
-              title="Click to toggle mic"
+              title={hasStarted ? 'Click to mute/unmute mic' : 'Click to start voice call'}
             >
               <div className="h-28 w-28 sm:h-36 sm:w-36 rounded-full bg-black/20 backdrop-blur-md flex flex-col items-center justify-center text-white border border-white/25 shadow-inner">
-                {agentState === 'speaking' ? (
-                  <span className="text-3xl animate-bounce">🎙️</span>
+                {!hasStarted ? (
+                  <>
+                    <span className="text-3xl animate-bounce">🎙️</span>
+                    <span className="text-[10px] font-bold tracking-wider mt-1 uppercase text-white/90">
+                      Tap to Talk
+                    </span>
+                  </>
+                ) : agentState === 'speaking' ? (
+                  <>
+                    <span className="text-3xl animate-bounce">🎙️</span>
+                    <span className="text-[10px] font-bold tracking-wider mt-1 uppercase text-white/90">
+                      Speaking
+                    </span>
+                  </>
                 ) : agentState === 'thinking' ? (
-                  <span className="text-3xl animate-spin">✨</span>
+                  <>
+                    <span className="text-3xl animate-spin">✨</span>
+                    <span className="text-[10px] font-bold tracking-wider mt-1 uppercase text-white/90">
+                      Thinking
+                    </span>
+                  </>
                 ) : isMuted ? (
-                  <span className="text-3xl opacity-75">🔇</span>
+                  <>
+                    <span className="text-3xl opacity-75">🔇</span>
+                    <span className="text-[10px] font-bold tracking-wider mt-1 uppercase text-white/90">
+                      Muted
+                    </span>
+                  </>
                 ) : (
-                  <span className="text-3xl animate-pulse">🟢</span>
+                  <>
+                    <span className="text-3xl animate-pulse">🟢</span>
+                    <span className="text-[10px] font-bold tracking-wider mt-1 uppercase text-white/90">
+                      Listening
+                    </span>
+                  </>
                 )}
-                <span className="text-[11px] font-bold tracking-wider mt-1 uppercase text-white/90">
-                  {agentState}
-                </span>
               </div>
             </div>
           </div>
 
-          {/* Dynamic Frequency Waveform Bars */}
+          {/* Dynamic Frequency Waveform Bars - Live Reactive to Microphone Volume */}
           <div className="flex items-center gap-1.5 h-10">
             {[4, 8, 14, 22, 16, 28, 20, 12, 24, 18, 10, 6].map((baseHeight, idx) => {
               const active = agentState === 'speaking' || (agentState === 'listening' && !isMuted);
+              const reactiveHeight = active
+                ? Math.min(38, Math.max(8, baseHeight + (liveVolume * (idx % 2 === 0 ? 0.7 : 0.4))))
+                : 6;
               return (
                 <div
                   key={idx}
-                  className={`w-1.5 rounded-full transition-all duration-300 ${
-                    active ? 'bg-emerald-500' : 'bg-muted-foreground/30'
+                  className={`w-1.5 rounded-full transition-all duration-150 ${
+                    active
+                      ? liveVolume > 15
+                        ? 'bg-emerald-400 shadow-[0_0_8px_#34d399]'
+                        : 'bg-emerald-500'
+                      : 'bg-muted-foreground/30'
                   }`}
                   style={{
-                    height: active ? `${Math.max(8, (baseHeight * (idx % 2 === 0 ? 1.4 : 0.9)))}px` : '6px',
-                    animation: active ? `pulse ${0.4 + (idx % 4) * 0.2}s ease-in-out infinite alternate` : 'none',
+                    height: `${reactiveHeight}px`,
                   }}
                 />
               );
             })}
           </div>
 
-          {/* Subtitle / Status Prompt */}
-          <div className="space-y-1">
+          {/* Subtitle / Real-Time Transcription Stream */}
+          <div className="space-y-1.5 max-w-lg">
             <h2 className="text-lg font-bold tracking-tight text-foreground">
               {orb.title}
             </h2>
@@ -758,35 +916,102 @@ function CallInterface({ roomId, lang, callData, providerParam }) {
               {orb.sub}
             </p>
             {interimUserText && (
-              <p className="text-xs text-muted-foreground animate-pulse italic">
-                &ldquo;{interimUserText}...&rdquo;
-              </p>
+              <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/30 p-2 text-xs font-semibold text-emerald-700 dark:text-emerald-300 animate-pulse">
+                <span>🎤 آپ بول رہے ہیں: &ldquo;{interimUserText}&rdquo;</span>
+              </div>
+            )}
+            {isRecordingWhisper && (
+              <div className="rounded-lg bg-red-500/10 border border-red-500/30 p-2 text-xs font-semibold text-red-600 dark:text-red-400 animate-pulse">
+                <span>🔴 آواز ریکارڈ ہو رہی ہے... بولنے کے بعد چھوڑ دیں</span>
+              </div>
             )}
           </div>
 
           {/* Audio Controls Bar */}
-          <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
-            <Button
-              variant={isMuted ? 'destructive' : 'default'}
-              size="lg"
-              onClick={toggleMic}
-              className="gap-2.5 px-6 font-semibold shadow-md text-sm rounded-full"
-            >
-              {isMuted ? '🔇 Unmute Microphone' : '🎙️ Microphone Live (Speak Now)'}
-            </Button>
+          <div className="flex flex-wrap items-center justify-center gap-2.5 pt-2">
+            {!hasStarted ? (
+              <Button
+                size="lg"
+                onClick={startCallSession}
+                className="gap-2.5 px-8 font-bold shadow-lg text-sm rounded-full bg-emerald-600 hover:bg-emerald-700 text-white animate-bounce"
+              >
+                🎙️ بات شروع کریں (Click to Connect Microphone & Talk)
+              </Button>
+            ) : (
+              <>
+                <Button
+                  variant={isMuted ? 'destructive' : 'default'}
+                  size="default"
+                  onClick={toggleMic}
+                  className="gap-2 px-5 font-semibold shadow-sm text-xs rounded-full"
+                >
+                  {isMuted ? '🔇 Unmute Microphone' : '🎙️ Mic Live (Auto-Listening)'}
+                </Button>
 
-            <Button
-              variant="outline"
-              size="lg"
-              onClick={() => {
-                const sampleText = `السلام علیکم! ${providerName} میں خوش آمدید۔ آپ کو کیا کام کروانا ہے؟`;
-                speakAudio(sampleText);
-                toast.info(`Playing ${providerName} voice audio...`);
-              }}
-              className="gap-2 px-5 text-sm rounded-full"
-            >
-              🔊 Test Voice Audio
-            </Button>
+                {/* Push-to-Talk Whisper Backup */}
+                <Button
+                  variant={isRecordingWhisper ? 'destructive' : 'outline'}
+                  size="default"
+                  onMouseDown={startWhisperRecording}
+                  onMouseUp={stopWhisperRecording}
+                  onTouchStart={startWhisperRecording}
+                  onTouchEnd={stopWhisperRecording}
+                  className={`gap-2 px-4 text-xs rounded-full font-semibold ${
+                    isRecordingWhisper ? 'animate-pulse bg-red-600 text-white' : ''
+                  }`}
+                  title="Hold to speak with Whisper Neural AI"
+                >
+                  {isRecordingWhisper ? '🔴 Recording (Release to Send)' : '🎙️ Hold to Speak (Whisper AI)'}
+                </Button>
+
+                {/* Language Switcher */}
+                <div className="flex items-center gap-1 rounded-full border bg-muted/40 p-0.5 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSpeechLang('ur-PK');
+                      startContinuousSTT('ur-PK');
+                      toast.info('Voice language set to Urdu (اردو)');
+                    }}
+                    className={`px-3 py-1 rounded-full font-semibold transition-colors ${
+                      speechLang === 'ur-PK'
+                        ? 'bg-primary text-primary-foreground shadow-sm'
+                        : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    اردو
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSpeechLang('en-US');
+                      startContinuousSTT('en-US');
+                      toast.info('Voice language set to English');
+                    }}
+                    className={`px-3 py-1 rounded-full font-semibold transition-colors ${
+                      speechLang === 'en-US'
+                        ? 'bg-primary text-primary-foreground shadow-sm'
+                        : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    English
+                  </button>
+                </div>
+
+                <Button
+                  variant="ghost"
+                  size="default"
+                  onClick={() => {
+                    const sampleText = `السلام علیکم! ${providerName} میں خوش آمدید۔ آپ کو کیا کام کروانا ہے؟`;
+                    speakAudio(sampleText);
+                    toast.info(`Playing ${providerName} voice...`);
+                  }}
+                  className="gap-1.5 px-3 text-xs rounded-full text-muted-foreground hover:text-foreground"
+                >
+                  🔊 Test Voice
+                </Button>
+              </>
+            )}
           </div>
         </CardContent>
       </Card>
