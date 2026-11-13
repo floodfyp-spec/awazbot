@@ -6,7 +6,7 @@ import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { TRADE_TEMPLATES } from '@/lib/trade-templates';
 
-const API_BASE_URL = process.env.FASTAPI_BASE_URL || 'http://127.0.0.1:8000';
+const API_BASE_URL = process.env.API_BASE_URL || process.env.FASTAPI_BASE_URL || 'https://awazbot-api.onrender.com';
 const INTERNAL_SECRET = process.env.INTERNAL_API_SECRET || '';
 
 /**

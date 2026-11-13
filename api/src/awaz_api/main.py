@@ -52,6 +52,21 @@ def health_check():
     return {"ok": True}
 
 
+@app.get("/api/notify/check-config")
+def check_email_config():
+    """Diagnostic endpoint to verify email environment variables in production."""
+    smtp_user = os.getenv("GMAIL_SMTP_USER", "").strip()
+    raw_pass = os.getenv("GMAIL_APP_PASSWORD", "")
+    has_pass = bool(raw_pass and len(raw_pass.replace(" ", "").strip()) >= 16)
+    return {
+        "status": "ready" if (smtp_user and has_pass) else "missing_config",
+        "smtp_user": smtp_user or "NOT_CONFIGURED",
+        "has_app_password": has_pass,
+        "password_length": len(raw_pass.replace(" ", "").strip()) if raw_pass else 0,
+        "internal_secret_set": bool(os.getenv("INTERNAL_API_SECRET")),
+    }
+
+
 class EmailNotificationRequest(BaseModel):
     to: str
     subject: Optional[str] = "AwazBot KP - Notification"
@@ -92,10 +107,11 @@ def notify_test_email(
 
     try:
         thread = send_booking_email(test_booking, test_provider)
+        if thread:
+            thread.join(timeout=8.0)
         return {
             "ok": True,
             "dispatched_to": body.to,
-            "thread_alive": thread.is_alive() if thread else False,
         }
     except Exception as e:
         raise HTTPException(

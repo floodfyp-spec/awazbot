@@ -24,16 +24,30 @@ export async function POST(request) {
     let targetNotifyEmail = notify_email;
 
     try {
-      const { data: prov } = await supabase
+      let { data: prov, error: provErr } = await supabase
         .from('providers')
         .select('id, business_name, notify_email, whatsapp')
         .eq('id', targetProviderId)
         .maybeSingle();
 
+      if (provErr) {
+        const { createClient } = await import('@supabase/supabase-js');
+        const anonClient = createClient(
+          process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://mhervthlsxezerasjddg.supabase.co',
+          process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'sb_publishable_TAnORqZXzcAesd33LtkOIQ_Go3X4vCT'
+        );
+        const retryRes = await anonClient
+          .from('providers')
+          .select('id, business_name, notify_email, whatsapp')
+          .eq('id', targetProviderId)
+          .maybeSingle();
+        prov = retryRes.data;
+      }
+
       if (prov) {
         providerName = prov.business_name || providerName;
-        if (!targetNotifyEmail || targetNotifyEmail.includes('example.com')) {
-          targetNotifyEmail = prov.notify_email || targetNotifyEmail;
+        if (prov.notify_email && !prov.notify_email.includes('example.com')) {
+          targetNotifyEmail = prov.notify_email;
         }
       }
     } catch (lookupErr) {
@@ -82,7 +96,15 @@ export async function POST(request) {
 
     // 3. Dispatch Email notification directly to provider's Gmail via FastAPI backend
     try {
-      await fetch('http://127.0.0.1:8000/api/notify/test-email', {
+      const backendBase =
+        process.env.API_BASE_URL ||
+        process.env.NEXT_PUBLIC_API_URL ||
+        'https://awazbot-api.onrender.com';
+
+      const emailEndpoint = `${backendBase.replace(/\/$/, '')}/api/notify/test-email`;
+      console.log(`[bookings] Dispatching booking email to ${targetNotifyEmail} via ${emailEndpoint}`);
+
+      const mailRes = await fetch(emailEndpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -107,6 +129,13 @@ export async function POST(request) {
           },
         }),
       });
+
+      if (!mailRes.ok) {
+        const errText = await mailRes.text().catch(() => '');
+        console.warn(`[bookings] Email dispatch returned status ${mailRes.status}: ${errText}`);
+      } else {
+        console.log(`[bookings] Email successfully dispatched to ${targetNotifyEmail}`);
+      }
     } catch (mailErr) {
       console.warn('Email dispatch warning (continuing):', mailErr.message);
     }
