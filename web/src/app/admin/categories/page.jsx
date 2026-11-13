@@ -407,7 +407,7 @@ export default function AdminCategoriesPage() {
             <div className="text-center py-12 text-muted-foreground">
               <p className="text-3xl mb-2">📂</p>
               <p className="text-sm font-medium">No issues defined for this category</p>
-              <p className="text-xs">Click "+ Add Issue" to create one.</p>
+              <p className="text-xs">Click &quot;+ Add Issue&quot; to create one.</p>
             </div>
           ) : (
             <div className="space-y-3">
