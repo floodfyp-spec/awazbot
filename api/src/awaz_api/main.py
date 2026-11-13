@@ -26,6 +26,15 @@ app = FastAPI(
     description="Backend API for webhooks, voice-note workers, and booking side-effects.",
 )
 
+@app.get("/")
+def root():
+    return {
+        "status": "online",
+        "service": "AwazBot KP Backend API",
+        "health": "/health",
+        "docs": "/docs",
+    }
+
 app.include_router(whatsapp_router)
 
 app.add_middleware(
