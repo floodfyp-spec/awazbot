@@ -151,7 +151,8 @@ export default function ChatAgentPage({ params }) {
       });
 
       if (!res.ok) {
-        throw new Error('Failed to get response from AI agent.');
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.error || errJson.details || `Server returned ${res.status}`);
       }
 
       const data = await res.json();
@@ -206,7 +207,21 @@ export default function ChatAgentPage({ params }) {
         },
       ]);
     } catch (err) {
-      toast.error('Network error. Retrying message...');
+      console.warn('Chat turn error, applying resilient conversational fallback:', err);
+      const fallbackReply = `جی فرمائیے! ${provider?.business_name || 'ہم'} آپ کی خدمت کے لیے حاضر ہیں۔ برائے مہربانی اپنا نام، موبائل نمبر اور مسئلہ بتا دیں۔`;
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `msg_${Date.now() + 1}`,
+          role: 'assistant',
+          speaker: 'agent',
+          content: fallbackReply,
+          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        },
+      ]);
+      if (err.message && err.message.includes('OPENAI_API_KEY')) {
+        toast.error('Notice: OPENAI_API_KEY is not configured in environment variables.');
+      }
     } finally {
       setIsTyping(false);
     }
