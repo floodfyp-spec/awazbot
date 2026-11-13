@@ -72,7 +72,7 @@ export async function POST(request) {
           ? call_id
           : null;
 
-      const { data, error } = await supabase.from('bookings').insert({
+      let { data, error } = await supabase.from('bookings').insert({
         provider_id: validProviderId,
         call_id: validCallId,
         customer_name: customer_name || 'Valued Customer',
@@ -86,7 +86,28 @@ export async function POST(request) {
       }).select().single();
 
       if (error) {
-        console.warn('Note on bookings table insert:', error.message);
+        const { createClient } = await import('@supabase/supabase-js');
+        const anonClient = createClient(
+          process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://mhervthlsxezerasjddg.supabase.co',
+          process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'sb_publishable_TAnORqZXzcAesd33LtkOIQ_Go3X4vCT'
+        );
+        const retryInsert = await anonClient.from('bookings').insert({
+          provider_id: validProviderId,
+          call_id: validCallId,
+          customer_name: customer_name || 'Valued Customer',
+          customer_phone: customer_phone || '03001234567',
+          problem_text: problem_description || 'General Service Request',
+          issue_code: 'general_repair',
+          area: area || 'Peshawar',
+          status: 'confirmed',
+          slot_start: slotTime,
+          urgency: 'ROUTINE',
+        }).select().single();
+        if (retryInsert.data) {
+          savedBooking = retryInsert.data;
+        } else if (retryInsert.error) {
+          console.warn('Note on bookings table insert:', retryInsert.error.message);
+        }
       } else {
         savedBooking = data;
       }
@@ -101,40 +122,63 @@ export async function POST(request) {
         process.env.NEXT_PUBLIC_API_URL ||
         'https://awazbot-api.onrender.com';
 
-      const emailEndpoint = `${backendBase.replace(/\/$/, '')}/api/notify/test-email`;
-      console.log(`[bookings] Dispatching booking email to ${targetNotifyEmail} via ${emailEndpoint}`);
+      const primaryUrl = `${backendBase.replace(/\/$/, '')}/api/notify/test-email`;
+      const cloudFallbackUrl = 'https://awazbot-api.onrender.com/api/notify/test-email';
 
-      const mailRes = await fetch(emailEndpoint, {
+      const emailPayload = {
+        to: targetNotifyEmail,
+        subject: `New Booking: ${problem_description || 'Service Request'} - ${area || 'Peshawar'}`,
+        booking: {
+          id: bookingId,
+          customer_name: customer_name || 'Customer',
+          customer_phone: customer_phone || '03001234567',
+          area: area || 'Peshawar',
+          problem_description: problem_description || 'General Service Request',
+          preferred_slot: preferred_slot || 'Tomorrow 10:00 AM',
+          urgency: 'ROUTINE',
+        },
+        provider: {
+          id: targetProviderId,
+          name: providerName,
+          notify_email: targetNotifyEmail,
+        },
+      };
+
+      const sendOptions = {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'X-Internal-API-Secret': process.env.INTERNAL_API_SECRET || 'awazbot_secret_internal_key_2026',
         },
-        body: JSON.stringify({
-          to: targetNotifyEmail,
-          subject: `New Booking: ${problem_description || 'Service Request'} - ${area || 'Peshawar'}`,
-          booking: {
-            id: bookingId,
-            customer_name: customer_name || 'Customer',
-            customer_phone: customer_phone || '03001234567',
-            area: area || 'Peshawar',
-            problem_description: problem_description || 'General Service Request',
-            preferred_slot: preferred_slot || 'Tomorrow 10:00 AM',
-            urgency: 'ROUTINE',
-          },
-          provider: {
-            id: targetProviderId,
-            name: providerName,
-            notify_email: targetNotifyEmail,
-          },
-        }),
-      });
+        body: JSON.stringify(emailPayload),
+      };
 
-      if (!mailRes.ok) {
-        const errText = await mailRes.text().catch(() => '');
-        console.warn(`[bookings] Email dispatch returned status ${mailRes.status}: ${errText}`);
-      } else {
-        console.log(`[bookings] Email successfully dispatched to ${targetNotifyEmail}`);
+      let delivered = false;
+      try {
+        console.log(`[bookings] Dispatching booking email to ${targetNotifyEmail} via ${primaryUrl}`);
+        const res = await fetch(primaryUrl, sendOptions);
+        if (res.ok) {
+          delivered = true;
+          console.log(`[bookings] Email successfully dispatched via primary (${primaryUrl})`);
+        } else {
+          console.warn(`[bookings] Primary dispatch returned status ${res.status}`);
+        }
+      } catch (primaryErr) {
+        console.warn(`[bookings] Primary dispatch failed (${primaryErr.message})`);
+      }
+
+      // If primary failed and was not already onrender, retry directly against live cloud backend!
+      if (!delivered && !primaryUrl.includes('onrender.com')) {
+        try {
+          console.log(`[bookings] Retrying dispatch via live cloud backend (${cloudFallbackUrl})...`);
+          const resFallback = await fetch(cloudFallbackUrl, sendOptions);
+          if (resFallback.ok) {
+            delivered = true;
+            console.log(`[bookings] Email successfully delivered via live cloud backend!`);
+          }
+        } catch (fallbackErr) {
+          console.warn(`[bookings] Cloud fallback error:`, fallbackErr.message);
+        }
       }
     } catch (mailErr) {
       console.warn('Email dispatch warning (continuing):', mailErr.message);

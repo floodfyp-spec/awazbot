@@ -13,21 +13,20 @@ export async function POST(request) {
     } = body;
 
     const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) {
-      return NextResponse.json(
-        { error: 'OPENAI_API_KEY is not configured.' },
-        { status: 500 }
-      );
-    }
 
-    const providerName = provider.business_name || provider.name || 'Local Service Provider';
-    const tradeNames = (provider.trades || ['electrician']).join(', ');
-    const servicesList = (provider.services || [])
-      .map((s) => `• ${s.name} (PKR ${(s.price_from || s.price_min || 1000).toLocaleString()} - ${(s.price_to || s.price_max || 3000).toLocaleString()})`)
-      .join('\n') || '• General Inspection & Repair (PKR 1,000 - 3,000)';
-    const customInstructions = provider.custom_instructions || 'Focus on prompt and quality service in Peshawar.';
+    let spokenReply = '';
+    let extractedData = {};
 
-    const systemPrompt = `You are the friendly, intelligent AI Voice Receptionist for "${providerName}", a premier local service provider in Peshawar, Khyber Pakhtunkhwa (Specializing in: ${tradeNames}).
+    if (apiKey) {
+      try {
+        const providerName = provider.business_name || provider.name || 'Local Service Provider';
+        const tradeNames = (provider.trades || ['electrician']).join(', ');
+        const servicesList = (provider.services || [])
+          .map((s) => `• ${s.name} (PKR ${(s.price_from || s.price_min || 1000).toLocaleString()} - ${(s.price_to || s.price_max || 3000).toLocaleString()})`)
+          .join('\n') || '• General Inspection & Repair (PKR 1,000 - 3,000)';
+        const customInstructions = provider.custom_instructions || 'Focus on prompt and quality service in Peshawar.';
+
+        const systemPrompt = `You are the friendly, intelligent AI Voice Receptionist for "${providerName}", a premier local service provider in Peshawar, Khyber Pakhtunkhwa (Specializing in: ${tradeNames}).
 
 SERVICES & STANDARD RATES FOR ${providerName}:
 ${servicesList}
@@ -78,56 +77,113 @@ At the very end of your response, ALWAYS append a JSON block formatted exactly a
 }
 \`\`\``;
 
-    // Build OpenAI messages
-    const messages = [
-      { role: 'system', content: systemPrompt },
-      ...conversation_history.slice(-8).map((msg) => ({
-        role: msg.speaker === 'user' || msg.role === 'user' ? 'user' : 'assistant',
-        content: msg.text || msg.content || '',
-      })),
-    ];
+        const messages = [
+          { role: 'system', content: systemPrompt },
+          ...conversation_history.slice(-8).map((msg) => ({
+            role: msg.speaker === 'user' || msg.role === 'user' ? 'user' : 'assistant',
+            content: msg.text || msg.content || '',
+          })),
+        ];
 
-    if (user_message) {
-      messages.push({ role: 'user', content: user_message });
+        if (user_message) {
+          messages.push({ role: 'user', content: user_message });
+        }
+
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 9000);
+
+        const aiRes = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            model: 'gpt-4o-mini',
+            messages,
+            temperature: 0.5,
+            max_tokens: 250,
+          }),
+          signal: controller.signal,
+        });
+
+        clearTimeout(timeout);
+
+        if (aiRes.ok) {
+          const aiData = await aiRes.json();
+          const rawReply = aiData.choices?.[0]?.message?.content || '';
+
+          const jsonMatch = rawReply.match(/```json\s*([\s\S]*?)\s*```/);
+          if (jsonMatch) {
+            try {
+              extractedData = JSON.parse(jsonMatch[1]);
+              spokenReply = rawReply.replace(/```json[\s\S]*?```/, '').trim();
+            } catch (e) {
+              console.warn('Could not parse JSON block from LLM output', e);
+            }
+          } else {
+            spokenReply = rawReply;
+          }
+        } else {
+          const errText = await aiRes.text();
+          console.warn('OpenAI returned error, switching to conversational fallback:', errText);
+        }
+      } catch (aiErr) {
+        console.warn('OpenAI call failed or timed out, switching to fallback:', aiErr.message);
+      }
     }
 
-    const aiRes = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o-mini',
-        messages,
-        temperature: 0.5,
-        max_tokens: 250,
-      }),
-    });
+    // Heuristic Conversational Fallback Engine (Runs if OpenAI unavailable or unconfigured)
+    const providerName = provider.business_name || provider.name || 'Local Service Provider';
+    if (!spokenReply) {
+      const msg = (user_message || '').toLowerCase();
+      const phoneMatch = user_message ? user_message.match(/(?:\+92|0)?3[0-9]{2}[-\s]?[0-9]{7}/) : null;
+      const detectedPhone = phoneMatch ? phoneMatch[0].replace(/[-\s]/g, '') : null;
 
-    if (!aiRes.ok) {
-      const errText = await aiRes.text();
-      console.error('OpenAI chat error:', errText);
-      return NextResponse.json(
-        { error: 'OpenAI API error', details: errText },
-        { status: 502 }
-      );
-    }
+      // Detect Area
+      let detectedArea = null;
+      const peshawarAreas = [
+        'hayatabad', 'حیات آباد', 'sadar', 'صدر', 'cantt', 'کینٹ',
+        'university town', 'یونیورسٹی ٹاؤن', 'gulbahar', 'گلبہار',
+        'dalazak', 'ڈلازاک', 'dabgari', 'ڈبگری', 'warsak', 'وارسک', 'kohat road', 'ring road'
+      ];
+      for (const a of peshawarAreas) {
+        if (msg.includes(a)) {
+          detectedArea = a.charAt(0).toUpperCase() + a.slice(1);
+          break;
+        }
+      }
 
-    const aiData = await aiRes.json();
-    const rawReply = aiData.choices?.[0]?.message?.content || '';
+      // Detect Confirmation
+      const isConfirming =
+        msg.includes('confirm') || msg.includes('کنفرم') || msg.includes('ہاں') ||
+        msg.includes('جی ہاں') || msg.includes('ٹھیک ہے') || msg.includes('done') ||
+        msg.includes('yes') || msg.includes('ok');
 
-    // Separate spoken text from structured JSON block
-    let spokenReply = rawReply;
-    let extractedData = {};
+      // Update extracted state
+      extractedData = {
+        customer_name: booking_draft.customer_name || 'Valued Customer',
+        customer_phone: detectedPhone || booking_draft.customer_phone || null,
+        area: detectedArea || booking_draft.area || null,
+        problem_description: booking_draft.problem_description || 'General Service & Inspection',
+        preferred_slot: booking_draft.preferred_slot || 'Tomorrow 11:00 AM',
+        is_confirmed: false,
+        urgency: 'ROUTINE',
+      };
 
-    const jsonMatch = rawReply.match(/```json\s*([\s\S]*?)\s*```/);
-    if (jsonMatch) {
-      try {
-        extractedData = JSON.parse(jsonMatch[1]);
-        spokenReply = rawReply.replace(/```json[\s\S]*?```/, '').trim();
-      } catch (e) {
-        console.warn('Could not parse JSON block from LLM output', e);
+      const hasPhone = Boolean(extractedData.customer_phone);
+
+      if (isConfirming && hasPhone) {
+        extractedData.is_confirmed = true;
+        spokenReply = `بہت شکریہ جناب! آپ کی بکنگ مکمل ہو چکی ہے اور سروس پرووائیڈر کو اطلاع بذریعہ ای میل بھیج دی گئی ہے۔ کاریگر جلد آپ کے دیے گئے نمبر پر رابطہ کرے گا۔`;
+      } else if (isConfirming && !hasPhone) {
+        spokenReply = `جی بالکل جناب! بکنگ کنفرم کرنے کے لیے برائے مہربانی اپنا موبائل فون نمبر بتا دیں۔`;
+      } else if (hasPhone && !extractedData.area) {
+        spokenReply = `فون نمبر نوٹ کر لیا گیا ہے۔ برائے مہربانی پشاور میں اپنا علاقہ (مثلاً حیات آباد یا صدر) اور مناسب وقت بتا دیں۔`;
+      } else if (hasPhone && extractedData.area) {
+        spokenReply = `بہترین! ہم نے آپ کا فون نمبر اور علاقہ نوٹ کر لیا ہے۔ کیا ہم کل صبح 11 بجے کی بکنگ فائنل کر دیں؟`;
+      } else {
+        spokenReply = `السلام علیکم! ${providerName} پشاور میں خوش آمدید۔ میں آپ کا اے آئی اسسٹنٹ ہوں۔ برائے مہربانی بتائیں کہ آپ کو کس سروس کی ضرورت ہے اور اپنا رابطہ نمبر شیئر فرمائیں۔`;
       }
     }
 
