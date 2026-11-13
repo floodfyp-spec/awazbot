@@ -64,18 +64,26 @@ function getTradeDetails(provider) {
 /**
  * Inner call component rendered inside LiveKitRoom context
  */
-function CallInterface({ roomId, lang, callData }) {
+function CallInterface({ roomId, lang, callData, providerParam }) {
   const room = useRoomContext();
   const connectionState = useConnectionState();
   const t = getDictionary(lang);
 
-  // Active Provider Info
+  // Active Provider Info - Never force Khan Electric if another provider was requested
   const targetProvider =
     callData?.provider ||
     DEMO_PROVIDERS.find(
-      (p) => p.id === callData?.provider_id || p.slug === callData?.provider_id
-    ) ||
-    DEMO_PROVIDERS[0];
+      (p) =>
+        (providerParam && (p.id === providerParam || p.slug === providerParam)) ||
+        (callData?.provider_id && (p.id === callData.provider_id || p.slug === callData.provider_id))
+    ) || (providerParam ? {
+      id: providerParam,
+      name: providerParam.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+      business_name: providerParam.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+      trades: ['electrician'],
+      notify_email: 'mubasiranwar70@gmail.com',
+      greeting_ur: `السلام علیکم! ${providerParam.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())} میں خوش آمدید۔ میں آپ کا اے آئی وائس اسسٹنٹ ہوں۔`,
+    } : DEMO_PROVIDERS[0]);
 
   const providerName = targetProvider?.business_name || targetProvider?.name || 'Local Service Provider';
   const providerEmail = targetProvider?.notify_email || 'mubasiranwar70@gmail.com';
@@ -174,7 +182,16 @@ function CallInterface({ roomId, lang, callData }) {
           }
         };
 
-        await audio.play();
+        try {
+          const playPromise = audio.play();
+          if (playPromise !== undefined) {
+            await playPromise;
+          }
+        } catch (playErr) {
+          console.warn('Audio playback note (requires user gesture):', playErr.message);
+          isSpeakingRef.current = false;
+          setAgentState('listening');
+        }
         return;
       }
     } catch (err) {
@@ -763,7 +780,7 @@ function CallInterface({ roomId, lang, callData }) {
               size="lg"
               onClick={() => {
                 const sampleText = `السلام علیکم! ${providerName} میں خوش آمدید۔ آپ کو کیا کام کروانا ہے؟`;
-                speakLocal(sampleText);
+                speakAudio(sampleText);
                 toast.info(`Playing ${providerName} voice audio...`);
               }}
               className="gap-2 px-5 text-sm rounded-full"
@@ -1086,12 +1103,12 @@ export default function CallScreenPage({ params }) {
 
       // 2. Fetch fresh token from /api/calls/web for the specific provider
       try {
-        const targetId = providerParam || 'd1111111-1111-1111-1111-111111111101';
+        const targetId = providerParam || undefined;
         const res = await fetch('/api/calls/web', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            mode: 'provider',
+            mode: targetId ? 'provider' : 'directory',
             provider_id: targetId,
           }),
         });
@@ -1159,7 +1176,7 @@ export default function CallScreenPage({ params }) {
       onError={(err) => console.error('LiveKit Room Error:', err)}
     >
       <RoomAudioRenderer />
-      <CallInterface roomId={roomId} lang={lang} callData={callSession} />
+      <CallInterface roomId={roomId} lang={lang} callData={callSession} providerParam={providerParam} />
     </LiveKitRoom>
   );
 }

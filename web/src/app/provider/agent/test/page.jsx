@@ -81,7 +81,7 @@ export default function TestAgentPage() {
       }
 
       toast.success('LiveKit voice session initiated! Connecting...');
-      router.push(`/call/${data.roomName}`);
+      router.push(`/call/${data.roomName}?provider=${encodeURIComponent(provider.id)}`);
     } catch (err) {
       toast.error('Network error starting test call: ' + err.message);
     } finally {

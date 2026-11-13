@@ -39,17 +39,20 @@ export default function ChatAgentPage({ params }) {
     async function loadProvider() {
       try {
         const supabase = createClient();
-        const { data: dbProv } = await supabase
+        const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(providerId);
+        const query = supabase
           .from('providers')
-          .select('id, business_name, slug, provider_code, status, trades, whatsapp, notify_email')
-          .eq('id', providerId)
-          .maybeSingle();
+          .select('id, business_name, slug, provider_code, status, trades, whatsapp, notify_email');
+
+        const { data: dbProv } = isUuid
+          ? await query.eq('id', providerId).maybeSingle()
+          : await query.eq('slug', providerId).maybeSingle();
 
         if (dbProv) {
           const { data: configRow } = await supabase
             .from('agent_configs')
             .select('config')
-            .eq('provider_id', providerId)
+            .eq('provider_id', dbProv.id)
             .eq('is_active', true)
             .order('version', { ascending: false })
             .limit(1)
@@ -58,7 +61,7 @@ export default function ChatAgentPage({ params }) {
           const { data: dbServices } = await supabase
             .from('provider_services')
             .select('name, price_from, price_to')
-            .eq('provider_id', providerId);
+            .eq('provider_id', dbProv.id);
 
           const cfg = configRow?.config || {};
           const fullProv = {
@@ -82,15 +85,27 @@ export default function ChatAgentPage({ params }) {
         console.warn('DB provider fetch note:', err);
       }
 
-      // Fallback to demo provider
-      const matched =
-        DEMO_PROVIDERS.find((p) => p.id === providerId || p.slug === providerId) ||
-        DEMO_PROVIDERS[0];
-      setProvider({
-        ...matched,
-        business_name: matched.name,
-        greeting_ur: `السلام علیکم! ${matched.name} میں خوش آمدید۔ میں آپ کا اے آئی چیٹ اسسٹنٹ ہوں۔ میں آپ کی کیا مدد کر سکتا ہوں؟`,
-      });
+      // Fallback to matching demo provider
+      const matched = DEMO_PROVIDERS.find((p) => p.id === providerId || p.slug === providerId);
+      if (matched) {
+        setProvider({
+          ...matched,
+          business_name: matched.name,
+          greeting_ur: `السلام علیکم! ${matched.name} میں خوش آمدید۔ میں آپ کا اے آئی چیٹ اسسٹنٹ ہوں۔ میں آپ کی کیا مدد کر سکتا ہوں؟`,
+        });
+      } else {
+        const readableName = (providerId || 'AwazBot')
+          .replace(/[-_]/g, ' ')
+          .replace(/\b\w/g, (c) => c.toUpperCase());
+        setProvider({
+          id: providerId,
+          name: readableName,
+          business_name: readableName,
+          trades: ['electrician'],
+          notify_email: 'mubasiranwar70@gmail.com',
+          greeting_ur: `السلام علیکم! ${readableName} میں خوش آمدید۔ میں آپ کا اے آئی چیٹ اسسٹنٹ ہوں۔ میں آپ کی کیا مدد کر سکتا ہوں؟`,
+        });
+      }
       setLoading(false);
     }
 

@@ -53,18 +53,21 @@ export async function POST(request) {
     let providerInfo = null;
     if (provider_id) {
       try {
-        const { data: dbProv } = await supabase
+        const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(provider_id);
+        const query = supabase
           .from('providers')
-          .select('id, business_name, slug, provider_code, status, trades, whatsapp, notify_email')
-          .eq('id', provider_id)
-          .maybeSingle();
+          .select('id, business_name, slug, provider_code, status, trades, whatsapp, notify_email');
+
+        const { data: dbProv } = isUuid
+          ? await query.eq('id', provider_id).maybeSingle()
+          : await query.eq('slug', provider_id).maybeSingle();
 
         if (dbProv) {
           // Fetch active agent configuration
           const { data: configRow } = await supabase
             .from('agent_configs')
             .select('id, version, config, is_active')
-            .eq('provider_id', provider_id)
+            .eq('provider_id', dbProv.id)
             .eq('is_active', true)
             .order('version', { ascending: false })
             .limit(1)
@@ -74,10 +77,17 @@ export async function POST(request) {
           const { data: dbServices } = await supabase
             .from('provider_services')
             .select('id, name, price_from, price_to')
-            .eq('provider_id', provider_id);
+            .eq('provider_id', dbProv.id);
 
           const agentCfg = configRow?.config || {};
           const bName = dbProv.business_name || 'Local Service Provider';
+
+          // Determine specialized trade in Urdu
+          const trades = dbProv.trades || ['electrician'];
+          let tradeLabelUr = 'الیکٹریکل وائرنگ و شارٹ سرکٹ فالٹ';
+          if (trades.includes('plumber_gas')) tradeLabelUr = 'پلمبنگ، گیس پائپ اور گیزر';
+          else if (trades.includes('ac_fridge')) tradeLabelUr = 'انورٹر اے سی سروس اور گیس ری فل';
+          else if (trades.includes('ups_solar')) tradeLabelUr = 'سولر پینل اور یو پی ایس سسٹمز';
 
           providerInfo = {
             id: dbProv.id,
@@ -86,17 +96,17 @@ export async function POST(request) {
             slug: dbProv.slug,
             provider_code: dbProv.provider_code,
             status: dbProv.status,
-            trades: dbProv.trades || ['electrician'],
+            trades: trades,
             whatsapp: dbProv.whatsapp,
             notify_email: dbProv.notify_email || 'mubasiranwar70@gmail.com',
             agent_name: agentCfg.agent_name || `${bName} Voice Receptionist`,
             greeting_ur:
               agentCfg.greeting_ur ||
-              `السلام علیکم! ${bName} میں خوش آمدید۔ میں آپ کا خودکار اسسٹنٹ ہوں۔ میں آپ کی کیا مدد کر سکتا ہوں؟`,
-            greeting_ps: agentCfg.greeting_ps || 'TODO_PS',
-            greeting_en: agentCfg.greeting_en || `Welcome to ${bName}. How can we assist you today?`,
-            voice_ur: agentCfg.voice_ur || 'ur-PK-UzmaNeural',
-            voice_ps: agentCfg.voice_ps || 'ps-AF-LatifaNeural',
+              `السلام علیکم! ${bName} پشاور میں خوش آمدید۔ میں آپ کا اے آئی وائس اسسٹنٹ ہوں۔ میں آپ کی کیا مدد کر سکتا ہوں؟ کیا آپ کو ${tradeLabelUr} کی سروس چاہیے؟`,
+            greeting_ps: agentCfg.greeting_ps || `پخیر راغلاست! زه د ${bName} غږیز همکار یم. زه ستاسو څه مرسته کولی شم؟`,
+            greeting_en: agentCfg.greeting_en || `Welcome to ${bName} Peshawar. I am your AI Voice Assistant. How can we assist you today?`,
+            voice_ur: agentCfg.voice_ur || 'alloy',
+            voice_ps: agentCfg.voice_ps || 'alloy',
             services: (dbServices && dbServices.length > 0) ? dbServices : (agentCfg.services || []),
             custom_instructions: agentCfg.custom_instructions || '',
             agent_config: agentCfg,
@@ -106,19 +116,63 @@ export async function POST(request) {
         console.warn('DB provider lookup note:', e.message);
       }
 
+      // Check DEMO_PROVIDERS if not found in database
       if (!providerInfo) {
-        const demo =
-          DEMO_PROVIDERS.find(
-            (p) => p.id === provider_id || p.slug === provider_id
-          ) || DEMO_PROVIDERS[0];
+        const demo = DEMO_PROVIDERS.find(
+          (p) => p.id === provider_id || p.slug === provider_id
+        );
+        if (demo) {
+          const trades = demo.trades || ['electrician'];
+          let tradeLabelUr = 'الیکٹریکل وائرنگ و شارٹ سرکٹ فالٹ';
+          if (trades.includes('plumber_gas')) tradeLabelUr = 'پلمبنگ، گیس پائپ اور گیزر';
+          else if (trades.includes('ac_fridge')) tradeLabelUr = 'انورٹر اے سی سروس اور گیس ری فل';
+          else if (trades.includes('ups_solar')) tradeLabelUr = 'سولر پینل اور یو پی ایس سسٹمز';
+
+          providerInfo = {
+            ...demo,
+            business_name: demo.name,
+            greeting_ur: `السلام علیکم! ${demo.name} پشاور میں خوش آمدید۔ میں آپ کا اے آئی وائس اسسٹنٹ ہوں۔ میں آپ کی کیا مدد کر سکتا ہوں؟ کیا آپ کو ${tradeLabelUr} کی سروس چاہیے؟`,
+            voice_ur: 'alloy',
+            agent_name: `${demo.name} Voice Receptionist`,
+          };
+        }
+      }
+
+      // If still not matched, construct a dedicated agent for the requested provider (never forcing Khan Electric)
+      if (!providerInfo) {
+        const readableName = provider_id
+          .replace(/[-_]/g, ' ')
+          .replace(/\b\w/g, (c) => c.toUpperCase());
+
         providerInfo = {
-          ...demo,
-          business_name: demo.name,
-          greeting_ur: `السلام علیکم! ${demo.name} میں خوش آمدید۔ میں آپ کا خودکار اسسٹنٹ ہوں۔ میں آپ کی کیا مدد کر سکتا ہوں؟`,
-          voice_ur: 'ur-PK-UzmaNeural',
-          agent_name: `${demo.name} Assistant`,
+          id: provider_id,
+          name: readableName,
+          business_name: readableName,
+          slug: provider_id,
+          trades: ['electrician'],
+          notify_email: 'mubasiranwar70@gmail.com',
+          agent_name: `${readableName} Voice Assistant`,
+          greeting_ur: `السلام علیکم! ${readableName} پشاور میں خوش آمدید۔ میں آپ کا اے آئی وائس اسسٹنٹ ہوں۔ میں آپ کی کیا مدد کر سکتا ہوں؟`,
+          voice_ur: 'alloy',
+          services: [
+            { name: 'جنرل فالٹ معائنہ و مرمت', price_from: 1000, price_to: 2500 }
+          ],
         };
       }
+    } else {
+      // General Directory Mode (No specific provider requested)
+      providerInfo = {
+        id: 'directory-general',
+        name: 'Peshawar Services Directory',
+        business_name: 'AwazBot KP Service Directory',
+        slug: 'directory',
+        trades: ['electrician', 'plumber_gas', 'ac_fridge', 'ups_solar'],
+        notify_email: 'mubasiranwar70@gmail.com',
+        agent_name: 'AwazBot Directory Assistant',
+        greeting_ur: 'السلام علیکم! پشاور سروس ڈائریکٹری میں خوش آمدید۔ آپ کو الیکٹریشن، پلمبر، سولر یا اے سی میں سے کس سروس کی ضرورت ہے؟',
+        voice_ur: 'alloy',
+        services: [],
+      };
     }
 
     // 4. Insert calls record
